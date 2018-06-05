@@ -1,6 +1,6 @@
 import React from "react"
 import { View } from "react-native"
-import { createFragmentContainer, graphql } from "react-relay"
+import { commitMutation, createFragmentContainer, graphql } from "react-relay"
 import styled from "styled-components/native"
 
 import { Schema, screenTrack, track } from "../../../utils/track"
@@ -20,16 +20,19 @@ import { Title } from "../Components/Title"
 import SwitchBoard from "lib/NativeModules/SwitchBoard"
 
 import { BillingAddress } from "./BillingAddress"
-import { ConfirmBidProps } from "./ConfirmBid"
+import {Bid, bidderPositionMutation, ConfirmBidProps} from "./ConfirmBid"
 
 import { Colors } from "lib/data/colors"
-import stripe from "tipsi-stripe"
+import {PayloadError} from "relay-runtime";
+import {metaphysics} from "../../../metaphysics";
+import {BidResultScreen} from "./BidResult";
+// import stripe from "tipsi-stripe"
 
-stripe.setOptions({
-  publishableKey: "fill me in",
-  // merchantId: "MERCHANT_ID", // Optional
-  // androidPayMode: "test", // Android only
-})
+// stripe.setOptions({
+//   publishableKey: "fill me in",
+//   // merchantId: "MERCHANT_ID", // Optional
+//   // androidPayMode: "test", // Android only
+// })
 
 export interface Address {
   fullName: string
@@ -47,7 +50,7 @@ interface ConformBidState {
   isLoading: boolean
 }
 
-interface StripeToken {
+export interface StripeToken {
   tokenId: string
   created: number
   livemode: 1 | 0
@@ -65,6 +68,21 @@ const theme = {
   errorColor: Colors.RedRegular,
 }
 
+const creditCardMutation = graphql`
+  mutation ConfirmFirstTimeBidMutation($input: creditCardInput!) {
+    createCreditCard(input: { token: "tok_1CZlngGK3Gnpfa3OFTmW5nBd" }) {
+      credit_card {
+        id
+        brand
+        name
+        last_digits
+        expiration_month
+        expiration_year
+      }
+    }
+  }
+`
+
 @screenTrack({
   context_screen: Schema.PageNames.BidFlowConfirmBidPage,
   context_screen_owner_type: null,
@@ -76,6 +94,8 @@ export class ConfirmFirstTimeBid extends React.Component<ConfirmBidProps, Confor
     conditionsOfSaleChecked: false,
     isLoading: false,
   }
+
+  private pollCount = 0
 
   onPressConditionsOfSale = () => {
     SwitchBoard.presentModalViewController(this, "/conditions-of-sale?present_modally=true")
@@ -99,17 +119,136 @@ export class ConfirmFirstTimeBid extends React.Component<ConfirmBidProps, Confor
 
   // Show stripe's complete card form- this does not use CreditCardForm.tsx at all
   awaitTokenFromCreditCardForm = async () => {
-    const token = await stripe.paymentRequestWithCardForm({ theme })
-    console.log("GOT TOKEN", token)
-    this.setState({ creditCardToken: token })
+    // const token = await stripe.paymentRequestWithCardForm({ theme })
+    // console.log("GOT TOKEN", token)
+    // this.setState({ creditCardToken: token })
   }
 
   @track({
     action_type: Schema.ActionTypes.Tap,
     action_name: Schema.ActionNames.BidFlowPlaceBid,
   })
-  placeBid() {
-    return null
+  createCreditCard() {
+    commitMutation(this.props.relay.environment, {
+      onCompleted: () => this.createBidderPosition(),
+      onError: e => console.error(e, e.message),
+      mutation: creditCardMutation,
+      variables: {
+        input: {
+          token: this.state.creditCardToken.tokenId
+        },
+      },
+    })
+  }
+
+  createBidderPosition() {
+    commitMutation(this.props.relay.environment, {
+      onCompleted: (results, errors) => this.verifyBidPosition(results, errors),
+      onError: e => console.error(e, e.message),
+      mutation: bidderPositionMutation,
+      variables: {
+        input: {
+          sale_id: this.props.sale_artwork.sale.id,
+          artwork_id: this.props.sale_artwork.artwork.id,
+          max_bid_amount_cents: this.props.bid.cents,
+        },
+      },
+    })
+  }
+
+  verifyBidPosition(results: any, errors: PayloadError[] | null | undefined) {
+    const status = results.createBidderPosition.result.status
+
+    if (!errors && status === "SUCCESS") {
+      this.bidPlacedSuccessfully(results)
+    } else {
+      // TODO: implement error screen
+    }
+  }
+
+  @track({
+    action_type: Schema.ActionTypes.Success,
+    action_name: Schema.ActionNames.BidFlowPlaceBid,
+  })
+  bidPlacedSuccessfully(results) {
+    const positionId = results.createBidderPosition.result.position.id
+    this.queryForBidPosition(positionId).then(this.checkBidPosition.bind(this))
+  }
+
+  queryForBidPosition(bidderPositionID: string) {
+    const query = `
+        {
+          me {
+            bidder_position(id: "${bidderPositionID}") {
+              status
+              message_header
+              message_description_md
+              position {
+                id
+                processed_at
+                is_active
+                suggested_next_bid {
+                  cents
+                  display
+                }
+              }
+            }
+          }
+        }
+      `
+    return metaphysics({ query })
+  }
+
+  checkBidPosition(result) {
+    const bidderPosition = result.data.me.bidder_position.position
+    const status = result.data.me.bidder_position.status
+    if (status === "WINNING") {
+      this.showBidResult(true, "WINNING")
+    } else if (status === "PENDING") {
+      if (this.pollCount > MAX_POLL_ATTEMPTS) {
+        const md = `We're receiving a high volume of traffic and your bid is still processing.  \
+If you don’t receive an update soon, please contact [support@artsy.net](mailto:support@artsy.net). `
+
+        this.showBidResult(false, "PROCESSING", "Bid Processing", md)
+      } else {
+        // initiating new request here (vs setInterval) to make sure we wait for the previus calls to return before making a new one
+        setTimeout(() => {
+          this.queryForBidPosition(bidderPosition.id).then(this.checkBidPosition.bind(this))
+        }, 1000)
+        this.pollCount += 1
+      }
+    } else {
+      this.showBidResult(
+        false,
+        status,
+        result.data.me.bidder_position.message_header,
+        result.data.me.bidder_position.message_description_md,
+        result.data.me.bidder_position.position.suggested_next_bid
+      )
+    }
+  }
+
+
+  showBidResult(winning: boolean, status: string, messageHeader?: string, messageDescriptionMd?: string, suggestedNextBid?: Bid) {
+    this.props.navigator.push({
+      component: BidResultScreen,
+      title: "",
+      passProps: {
+        sale_artwork: this.props.sale_artwork,
+        status,
+        message_header: messageHeader,
+        message_description_md: messageDescriptionMd,
+        winning,
+        bid: this.props.bid,
+        suggested_next_bid: suggestedNextBid,
+      },
+    })
+
+    this.setState({ isLoading: false })
+  }
+
+  conditionsOfSalePressed() {
+    this.setState({ conditionsOfSaleChecked: !this.state.conditionsOfSaleChecked })
   }
 
   maxBidPressed() {
@@ -147,24 +286,20 @@ export class ConfirmFirstTimeBid extends React.Component<ConfirmBidProps, Confor
 
             <Divider mb={2} />
 
-            <BidInfoRow
-              label="Billing address"
-              value={billingAddress && this.formatAddress(billingAddress)}
-              onPress={() => this.showBillingAddressForm()}
-            />
+            <BidInfoRow label="Billing address" value={billingAddress && this.formatAddress(billingAddress)} onPress={() => this.showBillingAddressForm()} />
 
             <Divider />
           </View>
 
           <View>
-            <Checkbox justifyContent="center">
+            <Checkbox justifyContent="center" onPress={() => this.conditionsOfSalePressed()}>
               <Serif14 mt={2} color="black60">
                 You agree to <LinkText onPress={this.onPressConditionsOfSale}>Conditions of Sale</LinkText>.
               </Serif14>
             </Checkbox>
 
             <Flex m={4}>
-              <Button text="Place Bid" onPress={() => this.placeBid()} />
+              <Button text="Place Bid" onPress={() => this.createCreditCard()} />
             </Flex>
           </View>
         </Container>

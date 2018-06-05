@@ -24,7 +24,7 @@ import { BidResultScreen } from "./BidResult"
 
 import { ConfirmBid_sale_artwork } from "__generated__/ConfirmBid_sale_artwork.graphql"
 
-interface Bid {
+export interface Bid {
   display: string
   cents: number
 }
@@ -43,7 +43,7 @@ interface ConformBidState {
 
 const MAX_POLL_ATTEMPTS = 20
 
-const bidderPositionMutation = graphql`
+export const bidderPositionMutation = graphql`
   mutation ConfirmBidMutation($input: BidderPositionInput!) {
     createBidderPosition(input: $input) {
       result {
@@ -57,6 +57,7 @@ const bidderPositionMutation = graphql`
     }
   }
 `
+
 @screenTrack({
   context_screen: Schema.PageNames.BidFlowConfirmBidPage,
   context_screen_owner_type: null,

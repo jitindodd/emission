@@ -19,8 +19,12 @@ export class FakeNavigator {
     }
   }
 
+  mostRecentRoute(): Route {
+    return this.stack[this.stack.length - 1]
+  }
+
   nextStep() {
-    const currentRoute = this.stack[this.stack.length - 1]
+    const currentRoute = this.mostRecentRoute()
 
     return renderer.create(
       React.createElement(currentRoute.component, {
@@ -31,5 +35,9 @@ export class FakeNavigator {
         },
       })
     )
+  }
+
+  clear() {
+    this.stack = []
   }
 }

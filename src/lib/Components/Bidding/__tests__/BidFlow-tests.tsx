@@ -32,7 +32,7 @@ it("allows bidders with a qualified credit card to bid", () => {
 
   expect(getTitleText(screen)).toEqual("Confirm your bid")
 
-  mockphysics.mockReturnValueOnce(Promise.resolve(mockRequestResponses.pollingForBid.highestedBidder))
+  mockphysics.mockReturnValueOnce(Promise.resolve(mockRequestResponses.pollingForBid.highestBidder))
   relay.commitMutation = jest.fn((_, { onCompleted }) => onCompleted(mockRequestResponses.placeingBid.bidAccepted))
 
   screen.root.findByType(Checkbox).instance.props.onPress()
@@ -57,7 +57,7 @@ it("allows bidders without a qualified credit card to register a card and bid", 
 
   expect(getTitleText(screen)).toEqual("Confirm your bid")
 
-  mockphysics.mockReturnValueOnce(Promise.resolve(mockRequestResponses.pollingForBid.highestedBidder))
+  mockphysics.mockReturnValueOnce(Promise.resolve(mockRequestResponses.pollingForBid.highestBidder))
   relay.commitMutation = jest.fn((_, { onCompleted }) => onCompleted(mockRequestResponses.placeingBid.bidAccepted))
 
   // TODO: Add billing address
@@ -119,7 +119,7 @@ const mockRequestResponses = {
     },
   },
   pollingForBid: {
-    highestedBidder: {
+    highestBidder: {
       data: {
         me: {
           bidder_position: {

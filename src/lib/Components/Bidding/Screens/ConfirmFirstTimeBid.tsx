@@ -83,6 +83,8 @@ const creditCardMutation = graphql`
   }
 `
 
+const MAX_POLL_ATTEMPTS = 20
+
 @screenTrack({
   context_screen: Schema.PageNames.BidFlowConfirmBidPage,
   context_screen_owner_type: null,
@@ -176,7 +178,8 @@ export class ConfirmFirstTimeBid extends React.Component<ConfirmBidProps, Confor
   }
 
   queryForBidPosition(bidderPositionID: string) {
-    const query = `
+    return metaphysics({
+      query: `
         {
           me {
             bidder_position(id: "${bidderPositionID}") {
@@ -196,38 +199,23 @@ export class ConfirmFirstTimeBid extends React.Component<ConfirmBidProps, Confor
           }
         }
       `
-    return metaphysics({ query })
+    })
   }
 
   checkBidPosition(result) {
     const bidderPosition = result.data.me.bidder_position.position
+    console.log(result.data.me.bidder_position)
     const status = result.data.me.bidder_position.status
+
+    // console.log(result.data.me.bidder_position)
     if (status === "WINNING") {
       this.showBidResult(true, "WINNING")
     } else if (status === "PENDING") {
-      if (this.pollCount > MAX_POLL_ATTEMPTS) {
-        const md = `We're receiving a high volume of traffic and your bid is still processing.  \
-If you don’t receive an update soon, please contact [support@artsy.net](mailto:support@artsy.net). `
-
-        this.showBidResult(false, "PROCESSING", "Bid Processing", md)
-      } else {
-        // initiating new request here (vs setInterval) to make sure we wait for the previus calls to return before making a new one
-        setTimeout(() => {
-          this.queryForBidPosition(bidderPosition.id).then(this.checkBidPosition.bind(this))
-        }, 1000)
-        this.pollCount += 1
-      }
+      setTimeout(() => this.queryForBidPosition(bidderPosition.id).then(this.checkBidPosition.bind(this)), 1000)
     } else {
-      this.showBidResult(
-        false,
-        status,
-        result.data.me.bidder_position.message_header,
-        result.data.me.bidder_position.message_description_md,
-        result.data.me.bidder_position.position.suggested_next_bid
-      )
+      // TODO: implement this later.
     }
   }
-
 
   showBidResult(winning: boolean, status: string, messageHeader?: string, messageDescriptionMd?: string, suggestedNextBid?: Bid) {
     this.props.navigator.push({
@@ -243,8 +231,6 @@ If you don’t receive an update soon, please contact [support@artsy.net](mailto
         suggested_next_bid: suggestedNextBid,
       },
     })
-
-    this.setState({ isLoading: false })
   }
 
   conditionsOfSalePressed() {

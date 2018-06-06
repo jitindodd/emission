@@ -1,7 +1,6 @@
 import React from "react"
 import { TouchableWithoutFeedback } from "react-native"
 import * as renderer from "react-test-renderer"
-import { times } from "lodash"
 
 import { Serif16 } from "../../Elements/Typography"
 import { Button } from "../../Components/Button"
@@ -10,33 +9,32 @@ import Spinner from "../../../Spinner"
 import { BillingAddress } from "../BillingAddress"
 import { ConfirmFirstTimeBid } from "../ConfirmFirstTimeBid"
 import { BidResultScreen } from "../BidResult"
+import {FakeNavigator} from "../../__tests__/Helpers/FakeNavigator";
 
 jest.mock("../../../../metaphysics", () => ({ metaphysics: jest.fn() }))
 import { metaphysics } from "../../../../metaphysics"
-const mockphysics = metaphysics as jest.Mock<any>
 
-// This let's us import the actual react-relay module, and replace specific functions within it with mocks.
 jest.unmock("react-relay")
 import relay from "react-relay"
 
-let nextStep
-const mockNavigator = { push: route => (nextStep = route), pop: () => null }
-jest.useFakeTimers()
-
+const mockphysics = metaphysics as jest.Mock<any>
+const fakeNavigator = new FakeNavigator()
 const { any, objectContaining } = jasmine
 
-// it("renders properly", () => {
-//   const component = renderer.create(<ConfirmFirstTimeBid {...initialProps} />).toJSON()
-//
-//   expect(component).toMatchSnapshot()
-// })
+beforeEach(() => {
+  jest.useFakeTimers()
+  fakeNavigator.clear()
+  mockphysics.mockReset()
+})
 
 it("shows the billing address that the user typed in the billing address form", () => {
   const billingAddressRow = renderer
-    .create(<ConfirmFirstTimeBid {...initialProps} navigator={mockNavigator} />)
+    .create(<ConfirmFirstTimeBid {...initialProps} navigator={fakeNavigator} />)
     .root.findAllByType(TouchableWithoutFeedback)[2]
 
   billingAddressRow.instance.props.onPress()
+
+  const nextStep = fakeNavigator.mostRecentRoute()
 
   expect(nextStep.component).toEqual(BillingAddress)
 
@@ -46,11 +44,18 @@ it("shows the billing address that the user typed in the billing address form", 
 })
 
 describe("successful bid", () => {
-  it("commits two mutations, one for createCreditCard followed by createBidderPosition", () => {
-    const component = renderer.create(<ConfirmFirstTimeBid {...initialProps} />)
-    relay.commitMutation = jest.fn((_, { onCompleted }) => onCompleted())
-    component.root.instance.setState({ creditCardToken: stripeToken })
+  beforeEach(() => {
+    relay.commitMutation = jest.fn()
+      .mockImplementationOnce((_, { onCompleted }) => onCompleted())
+      .mockImplementationOnce((_, { onCompleted }) => onCompleted(mockRequestResponses.placeingBid.bidAccepted))
+  })
 
+  it("commits two mutations, one for createCreditCard followed by createBidderPosition", () => {
+    mockphysics.mockReturnValueOnce(Promise.resolve(mockRequestResponses.pollingForBid.highestBid))
+
+    const component = renderer.create(<ConfirmFirstTimeBid {...initialProps} />)
+
+    component.root.instance.setState({ creditCardToken: stripeToken })
     component.root.findByType(Checkbox).instance.props.onPress()
     component.root.findByType(Button).instance.props.onPress()
 
@@ -80,32 +85,24 @@ describe("successful bid", () => {
   })
 
   it("polls for new results", () => {
-    const component = renderer.create(<ConfirmFirstTimeBid {...initialProps} />)
-    component.root.instance.setState({ creditCardToken: stripeToken })
-    relay.commitMutation = jest.fn((_, { onCompleted }) => onCompleted(mockRequestResponses.placeingBid.bidAccepted))
+    mockphysics.mockReturnValueOnce(Promise.resolve(mockRequestResponses.pollingForBid.pending))
+    mockphysics.mockReturnValueOnce(Promise.resolve(mockRequestResponses.pollingForBid.highestBid))
 
+    const component = renderer.create(<ConfirmFirstTimeBid {...initialProps} />)
+
+    component.root.instance.setState({ creditCardToken: stripeToken })
     component.root.findByType(Checkbox).instance.props.onPress()
     component.root.findByType(Button).instance.props.onPress()
 
-    let requestCounter = 0 // On the fifth attempt, return highestBidder
-    mockphysics.mockImplementation(() => {
-      requestCounter++
-      if (requestCounter > 5) {
-        return Promise.resolve(mockRequestResponses.pollingForBid.highestedBidder)
-      } else {
-        return Promise.resolve(mockRequestResponses.pollingForBid.pending)
-      }
-    })
+    jest.runOnlyPendingTimers()
+    jest.runAllTicks()
+    jest.runOnlyPendingTimers()
+    jest.runAllTicks()
 
-    component.root.findByType(Button).instance.props.onPress()
-
-    times(6, () => {
-      jest.runOnlyPendingTimers()
-      jest.runAllTicks()
-    })
+    const nextStep = fakeNavigator.mostRecentRoute()
 
     expect(nextStep.component).toEqual(BidResultScreen)
-    expect(nextStep.passProps.winning).toBeTruthy()
+    expect((nextStep.passProps as any).winning).toBeTruthy()
   })
 
   xit("shows a spinner", () => {
@@ -149,7 +146,7 @@ const mockRequestResponses = {
     },
   },
   pollingForBid: {
-    highestedBidder: {
+    highestBid: {
       data: {
         me: {
           bidder_position: {
@@ -207,6 +204,12 @@ const saleArtwork = {
 
 const initialProps = {
   sale_artwork: saleArtwork,
-  bid: { cents: 450000, display: "$45,000" },
-  relay: { environment: null },
+  bid: {
+    cents: 450000,
+    display: "$45,000",
+  },
+  relay: {
+    environment: null
+  },
+  navigator: fakeNavigator,
 } as any

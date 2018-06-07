@@ -20,9 +20,10 @@ import { Title } from "../Components/Title"
 import SwitchBoard from "lib/NativeModules/SwitchBoard"
 import { metaphysics } from "../../../metaphysics"
 
-import { BidResultScreen } from "./BidResult"
+import { BidResult } from "./BidResult"
 
 import { ConfirmBid_sale_artwork } from "__generated__/ConfirmBid_sale_artwork.graphql"
+import {WiningBidResult} from "./WiningBidResult";
 
 interface Bid {
   display: string
@@ -57,6 +58,36 @@ const bidderPositionMutation = graphql`
     }
   }
 `
+
+const maxPollingAttemptsExceeded = `
+  We're receiving a high volume of traffic and your bid is still processing.\n
+  If you don’t receive an update soon, please contact [support@artsy.net](mailto:support@artsy.net).
+`
+
+const queryForBidPosition = (bidderPositionID: string) => {
+  const query = `
+        {
+          me {
+            bidder_position(id: "${bidderPositionID}") {
+              status
+              message_header
+              message_description_md
+              position {
+                id
+                processed_at
+                is_active
+                suggested_next_bid {
+                  cents
+                  display
+                }
+              }
+            }
+          }
+        }
+      `
+  return metaphysics({ query })
+}
+
 @screenTrack({
   context_screen: Schema.PageNames.BidFlowConfirmBidPage,
   context_screen_owner_type: null,
@@ -83,8 +114,6 @@ export class ConfirmBid extends React.Component<ConfirmBidProps, ConformBidState
       },
       onError: e => {
         this.setState({ isLoading: false })
-        // TODO catch error!
-        // this.verifyAndShowBidResult(null, e)
         console.error("error!", e, e.message)
       },
       mutation: bidderPositionMutation,
@@ -98,40 +127,13 @@ export class ConfirmBid extends React.Component<ConfirmBidProps, ConformBidState
     })
   }
 
-  queryForBidPosition(bidderPositionID: string) {
-    const query = `
-        {
-          me {
-            bidder_position(id: "${bidderPositionID}") {
-              status
-              message_header
-              message_description_md
-              position {
-                id
-                processed_at
-                is_active
-                suggested_next_bid {
-                  cents
-                  display
-                }
-              }
-            }
-          }
-        }
-      `
-    return metaphysics({ query })
-  }
-
   verifyBidPosition(results, errors) {
-    // TODO: Need to handle if the results object is empty, for example if errors occurred and no request was made
-    // TODO: add analytics for errors
     const status = results.createBidderPosition.result.status
+
     if (!errors && status === "SUCCESS") {
-      this.bidPlacedSuccessfully(results)
+      this.startPollingForPosition(results.createBidderPosition.result.position.id)
     } else {
-      const message_header = results.createBidderPosition.result.message_header
-      const message_description_md = results.createBidderPosition.result.message_description_md
-      this.showBidResult(false, status, message_header, message_description_md)
+      this.presentFailingBidResult(results.createBidderPosition.result)
     }
   }
 
@@ -139,62 +141,59 @@ export class ConfirmBid extends React.Component<ConfirmBidProps, ConformBidState
     action_type: Schema.ActionTypes.Success,
     action_name: Schema.ActionNames.BidFlowPlaceBid,
   })
-  bidPlacedSuccessfully(results) {
-    const positionId = results.createBidderPosition.result.position.id
-    this.queryForBidPosition(positionId).then(this.checkBidPosition.bind(this))
+  startPollingForPosition(positionId) {
+    queryForBidPosition(positionId).then(this.checkBidPosition.bind(this))
   }
 
   checkBidPosition(result) {
-    const bidderPosition = result.data.me.bidder_position.position
-    const status = result.data.me.bidder_position.status
+    const { position, status } = result.data.me.bidder_position.position
+
     if (status === "WINNING") {
-      this.showBidResult(true, "WINNING")
+      this.presentWiningBidResult()
     } else if (status === "PENDING") {
       if (this.pollCount > MAX_POLL_ATTEMPTS) {
-        const md = `We're receiving a high volume of traffic and your bid is still processing.  \
-If you don’t receive an update soon, please contact [support@artsy.net](mailto:support@artsy.net). `
-
-        this.showBidResult(false, "PROCESSING", "Bid Processing", md)
+        this.presentFailingBidResult({
+          status: "PROCESSING",
+          message_header: "Bid Processing",
+          message_description_md: maxPollingAttemptsExceeded,
+          position: null
+        })
       } else {
         // initiating new request here (vs setInterval) to make sure we wait for the previus calls to return before making a new one
-        setTimeout(() => {
-          this.queryForBidPosition(bidderPosition.id).then(this.checkBidPosition.bind(this))
-        }, 1000)
+        setTimeout(() => queryForBidPosition(position.id).then(this.checkBidPosition.bind(this)), 1000)
+
         this.pollCount += 1
       }
     } else {
-      this.showBidResult(
-        false,
-        status,
-        result.data.me.bidder_position.message_header,
-        result.data.me.bidder_position.message_description_md,
-        result.data.me.bidder_position.position.suggested_next_bid
-      )
+      this.presentFailingBidResult(result.data.me.bidder_position)
     }
   }
 
-  showBidResult(
-    winning: boolean,
-    status: string,
-    messageHeader?: string,
-    messageDescriptionMd?: string,
-    suggestedNextBid?: Bid
-  ) {
+  presentFailingBidResult({ status, message_header, message_description_md, position }) {
     this.props.navigator.push({
-      component: BidResultScreen,
+      component: BidResult,
       title: "",
       passProps: {
         sale_artwork: this.props.sale_artwork,
-        status,
-        message_header: messageHeader,
-        message_description_md: messageDescriptionMd,
-        winning,
         bid: this.props.bid,
-        suggested_next_bid: suggestedNextBid,
+        status,
+        title: message_header,
+        errorMessage: message_description_md,
+        suggested_next_bid: position && position.suggested_next_bid,
       },
     })
 
     this.setState({ isLoading: false })
+  }
+
+  presentWiningBidResult() {
+    this.props.navigator.push({
+      component: WiningBidResult,
+      title: "",
+      passProps: {
+        sale_artwork: this.props.sale_artwork,
+      },
+    })
   }
 
   conditionsOfSalePressed() {

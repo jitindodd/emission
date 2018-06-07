@@ -28,82 +28,61 @@ interface Bid {
 interface BidResultProps {
   sale_artwork: BidResult_sale_artwork
   bid: Bid
-  winning: boolean
   status: string
-  message_header?: string
-  message_description_md?: string
-  suggested_next_bid?: Bid
+  title: string
+  description: string
+  suggestedNextBid: Bid
   navigator: NavigatorIOS
 }
 
 export class BidResult extends React.Component<BidResultProps> {
-  onPressBidAgain = () => {
-    // pushing to MaxBidScreen creates a circular relay reference but this works
-    // TODO: correct the screen transision animation
+  onPressBidAgain() {
     this.props.navigator.popToTop()
   }
 
-  exitBidFlow = async () => {
+  async exitBidFlow(status: string, saleId: string) {
     await SwitchBoard.dismissModalViewController(this)
-    if (this.props.status === "LIVE_BIDDING_STARTED") {
-      SwitchBoard.presentModalViewController(this, `/auction/${this.props.sale_artwork.sale.id}`)
+
+    if (status === "LIVE_BIDDING_STARTED") {
+      SwitchBoard.presentModalViewController(this, `/auction/${saleId}`)
     }
   }
 
   render() {
-    const { live_start_at, end_at } = this.props.sale_artwork.sale
-    // non-live sale doesn't have live_start_at so bidding is open until end time
-    if (this.props.winning) {
-      return (
-        <BiddingThemeProvider>
-          <Container mt={6}>
-            <View>
-              <Flex alignItems="center">
-                <Icon20 source={require("../../../../../images/circle-check-green.png")} />
-                <Title m={4}>You're the highest bidder</Title>
-                <TimeLeftToBidDisplay liveStartsAt={live_start_at} endAt={end_at} />
-              </Flex>
-            </View>
-            <BidGhostButton text="Continue" onPress={this.exitBidFlow} />
-          </Container>
-        </BiddingThemeProvider>
-      )
+    const { status } = this.props
+    const { id, live_start_at, end_at } = this.props.sale_artwork.sale
+
+    let nextBid
+    if (this.props.suggestedNextBid) {
+      // when bidder position is created and the suggested_next_bid is passed from prev screen
+      nextBid = this.props.suggestedNextBid.display
     } else {
-      const bidAgain = SHOW_TIMER_STATUSES.indexOf(this.props.status) > -1
-      let nextBid
-      if (this.props.suggested_next_bid) {
-        // when bidder position is created and the suggested_next_bid is passed from prev screen
-        nextBid = this.props.suggested_next_bid.display
-      } else {
-        // otherwise (when MP returns OUTBID without creating BP, when it already knows there are higher bids) select minimum_next_bid
-        nextBid = nextBid = this.props.sale_artwork.minimum_next_bid.display
-      }
-      const buttonMsg = bidAgain ? `Bid ${nextBid} or more` : "Continue"
-      return (
-        <BiddingThemeProvider>
-          <Container mt={6}>
-            <View>
-              <Flex alignItems="center">
-                <Icon20 source={require("../../../../../images/circle-x-red.png")} />
-                <Title m={4}>{this.props.message_header}</Title>
-                <MarkdownRenderer>{this.props.message_description_md}</MarkdownRenderer>
-                {bidAgain && <TimeLeftToBidDisplay liveStartsAt={live_start_at} endAt={end_at} />}
-              </Flex>
-            </View>
-            {bidAgain ? (
-              <Button
-                text={buttonMsg}
-                onPress={() => {
-                  this.onPressBidAgain()
-                }}
-              />
-            ) : (
-              <BidGhostButton text="Continue" onPress={this.exitBidFlow} />
-            )}
-          </Container>
-        </BiddingThemeProvider>
-      )
+      // otherwise (when MP returns OUTBID without creating BP, when it already knows there are higher bids) select minimum_next_bid
+      nextBid = nextBid = this.props.sale_artwork.minimum_next_bid.display
     }
+
+    const bidAgain = SHOW_TIMER_STATUSES.indexOf(this.props.status) > -1
+    const buttonMsg = bidAgain ? `Bid ${nextBid} or more` : "Continue"
+
+    return (
+      <BiddingThemeProvider>
+        <Container mt={6}>
+          <View>
+            <Flex alignItems="center">
+              <Icon20 source={require("../../../../../images/circle-x-red.png")} />
+              <Title m={4}>{this.props.title}</Title>
+              <MarkdownRenderer>{this.props.description}</MarkdownRenderer>
+              {bidAgain && <TimeLeftToBidDisplay liveStartsAt={live_start_at} endAt={end_at} />}
+            </Flex>
+          </View>
+          {bidAgain ? (
+            <Button text={buttonMsg} onPress={() => this.onPressBidAgain()} />
+          ) : (
+            <BidGhostButton text="Continue" onPress={() => this.exitBidFlow(status, id)} />
+          )}
+        </Container>
+      </BiddingThemeProvider>
+    )
   }
 }
 
@@ -127,21 +106,3 @@ const TimeLeftToBidDisplay: React.SFC<TimeLeftToBidDisplayProps> = props => {
     </Flex>
   )
 }
-
-export const BidResultScreen = createFragmentContainer(
-  BidResult,
-  graphql`
-    fragment BidResult_sale_artwork on SaleArtwork {
-      minimum_next_bid {
-        amount
-        cents
-        display
-      }
-      sale {
-        live_start_at
-        end_at
-        id
-      }
-    }
-  `
-)
